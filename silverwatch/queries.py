@@ -4,7 +4,7 @@ from collections import defaultdict
 from datetime import datetime
 from sqlite3 import Connection
 
-from silverwatch import cases, evidence, registry, review
+from silverwatch import cases, evidence, registry, review, transfers
 from silverwatch.errors import missing
 from silverwatch.ledger import current_entities, history, revisions
 
@@ -53,14 +53,35 @@ def district_overview(db: Connection, region: str, *, cut: int | None = None,
         area["reported_issues"] += row["report_count"]
     for row in demand:
         areas[row["district"]]["estimated_need"] += row["estimated_people"]
+    responsibility = transfers.responsibility_map(db, cut=cut, as_of=as_of)
+    attributed = 0
+    transferred_in = []
+    transferred_out = []
     for row in cases_now:
-        district = next((batch["district"] for batch in batches
-                         if batch["batch_id"] == row["payload"]["batch_id"]), None)
-        if district is None:
+        case_id = row["entity_id"]
+        resp = responsibility.get(case_id)
+        if resp is None or resp["responsible_region"] is None:
             continue
-        finding = findings[row["entity_id"]]["finding"]
-        if finding in {"substantiated", "pending", "inconclusive"}:
-            areas[district][finding] += 1
+        finding = findings[case_id]["finding"]
+        accepted = resp["accepted_transfer"] or {}
+        if resp["responsible_region"] == region and resp["origin_region"] == region:
+            attributed += 1
+            district = next((batch["district"] for batch in batches
+                             if batch["batch_id"] == row["payload"]["batch_id"]), None)
+            if district is not None and finding in {"substantiated", "pending", "inconclusive"}:
+                areas[district][finding] += 1
+        elif resp["responsible_region"] == region:
+            attributed += 1
+            transferred_in.append({"case_id": case_id,
+                                   "transfer_id": accepted.get("transfer_id"),
+                                   "from_region": resp["origin_region"],
+                                   "origin_district": resp["origin_district"],
+                                   "finding": finding})
+        elif resp["origin_region"] == region:
+            transferred_out.append({"case_id": case_id,
+                                    "transfer_id": accepted.get("transfer_id"),
+                                    "to_region": resp["responsible_region"],
+                                    "finding": finding})
     result = []
     for district, value in sorted(areas.items()):
         exposure = value["exposed_people"]
@@ -71,7 +92,9 @@ def district_overview(db: Connection, region: str, *, cut: int | None = None,
         result.append({"district": district, **value})
     return {"region": region, "as_of": as_of.isoformat() if as_of else None,
             "cut": cut, "areas": result, "provider_total": len(providers),
-            "touch_batch_total": len(batches), "case_total": len(cases_now)}
+            "touch_batch_total": len(batches), "case_total": attributed,
+            "transferred_in": sorted(transferred_in, key=lambda item: item["case_id"]),
+            "transferred_out": sorted(transferred_out, key=lambda item: item["case_id"])}
 
 
 def case_timeline(db: Connection, case_id: str, *, cut: int | None = None,
@@ -86,6 +109,9 @@ def case_timeline(db: Connection, case_id: str, *, cut: int | None = None,
             "finding": cases.finding(db, case_id, cut=cut, as_of=as_of),
             "remediations": [row for row in cases.current_remediations(db, cut=cut, as_of=as_of)
                              if row["case_id"] == case_id],
+            "transfers": [{**row["payload"], "event_seq": row["seq"], "digest": row["digest"]}
+                          for row in transfers.for_case(db, case_id, cut=cut, as_of=as_of)],
+            "responsibility": transfers.case_responsibility(db, case_id, cut=cut, as_of=as_of),
             "revisions": revisions(db, "case", case_id, cut=cut)}
 
 

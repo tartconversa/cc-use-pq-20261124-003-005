@@ -65,6 +65,53 @@
     "observed_at": "2026-10-19T09:30:00Z",
     "verified": true
   },
+  "transfers": [
+    {
+      "request": {
+        "transfer_id": "handover-urban",
+        "case_id": "meal-price-notice",
+        "from_region": "suburban",
+        "to_region": "urban",
+        "reason": "The provider's contract and payment records are administered by the urban office.",
+        "requested_by": "suburban-operator",
+        "requested_at": "2026-10-19T11:00:00Z"
+      },
+      "resolution": {
+        "decision": "rejected",
+        "decided_by": "urban-coordinator",
+        "decided_at": "2026-10-19T15:00:00Z",
+        "note": "The payment flow records were not attached to the case file."
+      }
+    },
+    {
+      "add_evidence": {
+        "evidence_id": "contract-copy",
+        "case_id": "meal-price-notice",
+        "evidence_type": "contract",
+        "source_ref": "archive://contract-copy-01",
+        "content_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "observed_at": "2026-10-19T16:00:00Z",
+        "verified": true
+      },
+      "request": {
+        "transfer_id": "handover-urban-second",
+        "case_id": "meal-price-notice",
+        "from_region": "suburban",
+        "to_region": "urban",
+        "reason": "Contract copy and payment records are now attached for urban verification.",
+        "requested_by": "suburban-operator",
+        "requested_at": "2026-10-19T17:00:00Z",
+        "supersedes": "handover-urban",
+        "supplement_refs": ["contract-copy"]
+      },
+      "resolution": {
+        "decision": "accepted",
+        "decided_by": "urban-coordinator",
+        "decided_at": "2026-10-20T08:00:00Z",
+        "note": "The urban office takes over contract and payment verification."
+      }
+    }
+  ],
   "decisions": [
     {
       "decision_id": "investigation-finding",

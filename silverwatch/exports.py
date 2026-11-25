@@ -72,9 +72,11 @@ def public_view(bulletin: dict) -> dict:
     masks = {"exposed", "nonresponse", "uncertainty_people", "reports", "substantiated",
              "pending", "inconclusive", "verified_remediations", "substantiated_rate",
              "potential_rate_bounds", "reconciliation_incomplete_batches", "batches"}
+    document.pop("transfers", None)
     for row in document["areas"]:
         row.pop("batches", None)
         row.pop("case_ids", None)
+        row.pop("transferred_out", None)
         row.pop("capacity_providers", None)
         if row["exposed"] < threshold:
             for field in masks:
@@ -91,6 +93,7 @@ def public_view(bulletin: dict) -> dict:
             row.pop("case_ids", None)
             row.pop("batches", None)
             row.pop("capacity_providers", None)
+        row.pop("transferred_out", None)
     for value in document["supply"].values():
         demand = value["estimated_people"]
         value.pop("capacity_providers", None)

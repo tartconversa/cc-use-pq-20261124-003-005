@@ -6,7 +6,7 @@ from sqlite3 import Connection
 
 from pydantic import ValidationError
 
-from silverwatch import cases
+from silverwatch import cases, transfers
 from silverwatch.contracts import Case, CaseEvidence, Remediation, ReviewDecision
 from silverwatch.errors import conflict, invalid, missing
 from silverwatch.ledger import append, current_entities, latest
@@ -52,6 +52,10 @@ def close(db: Connection, case_id: str, expected_finding: str, revision: int) ->
     if state["finding"]["finding"] != expected_finding:
         raise conflict("finding_changed", "案件核实结果已变化",
                        {"current": state["finding"]["finding"]})
+    pending = transfers.pending_for_case(db, case_id)
+    if pending is not None:
+        raise conflict("transfer_pending", "案件存在等待接收结论的跨地区转交，不能关闭",
+                       {"transfer_id": pending["transfer_id"]})
     if state["finding"]["finding"] == "substantiated":
         if not state["remediations"] or any(item["status"] != "verified" for item in state["remediations"]):
             raise conflict("remediation_open", "已确认案件仍有未核验整改")

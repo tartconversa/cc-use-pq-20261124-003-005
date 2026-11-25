@@ -5,9 +5,10 @@ from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from silverwatch import cases, evidence, planning, registry, review, service
+from silverwatch import cases, evidence, planning, registry, review, service, transfers
 from silverwatch.contracts import (AnalysisPolicy, Approval, Case, CaseEvidence,
-                                   NeedBatch, Provider, Remediation, ReviewDecision, TouchBatch)
+                                   CaseTransfer, NeedBatch, Provider, Remediation,
+                                   ReviewDecision, TouchBatch, TransferResolution)
 from silverwatch.ledger import current_cut
 from silverwatch.storage import Store
 
@@ -27,6 +28,14 @@ def run_fixture(path: str | Path) -> dict:
             cases.create(db, case, "case-intake", 1)
             material = CaseEvidence.model_validate(fixture["evidence"])
             evidence.add(db, material)
+            for entry in fixture.get("transfers", []):
+                if entry.get("add_evidence"):
+                    evidence.add(db, CaseEvidence.model_validate(entry["add_evidence"]))
+                transfer = CaseTransfer.model_validate(entry["request"])
+                transfers.request(db, transfer)
+                if entry.get("resolution"):
+                    transfers.resolve(db, transfer.transfer_id,
+                                      TransferResolution.model_validate(entry["resolution"]))
             for decision_data in fixture["decisions"]:
                 review.decide(db, ReviewDecision.model_validate(decision_data))
             action = Remediation.model_validate(fixture["remediation"])
@@ -48,10 +57,18 @@ def run_fixture(path: str | Path) -> dict:
             bulletin = service.publish(db, created["analysis_id"], 0)
             plan = planning.plan_region(db, region="suburban",
                                         period_end=datetime.fromisoformat("2026-11-01T00:00:00+00:00"))
+            handover = None
+            if fixture.get("transfers"):
+                view = transfers.case_transfer_view(db, case.case_id)
+                handover = {"responsible_region": view["responsibility"]["responsible_region"],
+                            "origin_region": view["responsibility"]["origin_region"],
+                            "transfer_count": len(view["transfers"]),
+                            "final_status": view["transfers"][-1]["status"]}
             return {"scenario": fixture["scenario"], "analysis": created,
                     "review_ready": review_state["ready"],
                     "bulletin": {"edition": bulletin["edition"],
                                  "digest": bulletin["bulletin_digest"],
                                  "case_counts": bulletin["document"]["case_counts"],
                                  "area_count": len(bulletin["document"]["areas"])},
+                    "handover": handover,
                     "service_plan": plan["totals"]}

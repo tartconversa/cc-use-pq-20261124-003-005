@@ -148,6 +148,47 @@ class Remediation(Strict):
         return self
 
 
+class CaseTransfer(Strict):
+    transfer_id: Key
+    case_id: Key
+    from_region: Region
+    to_region: Region
+    reason: Text
+    requested_by: Key
+    requested_at: datetime
+    status: Literal["requested", "accepted", "rejected"] = "requested"
+    decided_by: Key | None = None
+    decided_at: datetime | None = None
+    decision_note: Text | None = None
+    supplement_refs: list[Text] = Field(default_factory=list, max_length=30)
+    supersedes: Key | None = None
+
+    @model_validator(mode="after")
+    def lifecycle(self):
+        if self.from_region == self.to_region:
+            raise ValueError("转交目标地区必须与当前责任地区不同")
+        if self.status == "requested":
+            if self.decided_by or self.decided_at or self.decision_note:
+                raise ValueError("等待接收的转交不能包含接收结论")
+        else:
+            if not (self.decided_by and self.decided_at and self.decision_note):
+                raise ValueError("接收或拒收必须记录经办人、决定时间与说明")
+            if self.decided_at < self.requested_at:
+                raise ValueError("接收决定时间不能早于转交发起时间")
+            if self.decided_by == self.requested_by:
+                raise ValueError("转交发起人与接收决定人必须不同")
+        if self.supersedes and not self.supplement_refs:
+            raise ValueError("补充资料后再次转交必须引用补充材料")
+        return self
+
+
+class TransferResolution(Strict):
+    decision: Literal["accepted", "rejected"]
+    decided_by: Key
+    decided_at: datetime
+    note: Text
+
+
 class AnalysisPolicy(Strict):
     policy_id: Key
     minimum_exposure: Annotated[int, Field(ge=1, le=1_000_000_000)] = 100

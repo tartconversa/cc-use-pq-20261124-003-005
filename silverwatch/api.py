@@ -8,10 +8,10 @@ from typing import Iterator
 from fastapi import Body, FastAPI, Query, Response
 from pydantic import BaseModel, Field
 
-from silverwatch import analysis, cases, channels, comparison, csvio, exports, intake, lineage, ndjson, planning, publication, queries, reconciliation, registry, review, service, trends, workqueue
+from silverwatch import analysis, cases, channels, comparison, csvio, exports, intake, lineage, ndjson, planning, publication, queries, reconciliation, registry, review, service, transfers, trends, workqueue
 from silverwatch.contracts import (AnalysisPolicy, AnalysisRequest, Approval, Case,
-                                   CaseEvidence, NeedBatch, Provider, PublishRequest,
-                                   Remediation, ReviewDecision, TouchBatch)
+                                   CaseEvidence, CaseTransfer, NeedBatch, Provider, PublishRequest,
+                                   Remediation, ReviewDecision, TouchBatch, TransferResolution)
 from silverwatch.errors import Problem
 from silverwatch.storage import Store
 
@@ -134,10 +134,33 @@ def create_app(database: str | Path = "silverwatch.sqlite3") -> FastAPI:
         with write() as db:
             return review.close(db, case_id, body.expected_finding, body.revision)
 
+    @app.post("/cases/{case_id}/transfers")
+    def request_transfer(case_id: str, body: CaseTransfer):
+        if body.case_id != case_id:
+            raise Problem(422, "case_scope", "URL 与转交案件编号不一致")
+        with write() as db:
+            return transfers.request(db, body)
+
+    @app.post("/transfers/{transfer_id}/resolution")
+    def resolve_transfer(transfer_id: str, body: TransferResolution):
+        with write() as db:
+            return transfers.resolve(db, transfer_id, body)
+
+    @app.get("/cases/{case_id}/transfers")
+    def get_case_transfers(case_id: str, cut: int | None = None):
+        with read() as db:
+            return transfers.case_transfer_view(db, case_id, cut=cut)
+
     @app.get("/cases/{case_id}")
     def get_case(case_id: str, cut: int | None = None):
         with read() as db:
             return queries.case_timeline(db, case_id, cut=cut)
+
+    @app.get("/work/transfers")
+    def transfer_work(region: str, as_of: datetime | None = None,
+                      cut: int | None = None):
+        with read() as db:
+            return workqueue.transfer_queue(db, region=region, as_of=as_of, cut=cut)
 
     @app.get("/work/cases")
     def case_work(region: str | None = None, as_of: datetime | None = None,

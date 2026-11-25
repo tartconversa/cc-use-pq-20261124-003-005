@@ -4,7 +4,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from sqlite3 import Connection
 
-from silverwatch import cases, reconciliation
+from silverwatch import cases, reconciliation, transfers
 from silverwatch.analysis import outreach_bounds
 from silverwatch.contracts import ServiceKind
 from silverwatch.errors import invalid
@@ -25,6 +25,7 @@ def compare_channels(db: Connection, *, region: str, as_of: datetime, cut: int,
                and (cohort is None or row["cohort"] == cohort)]
     current_cases = cases.current_cases(db, cut=cut, as_of=as_of)
     findings = cases.all_findings(db, cut=cut, as_of=as_of)
+    responsibility = transfers.responsibility_map(db, cut=cut, as_of=as_of)
     by_batch = defaultdict(list)
     for item in current_cases:
         by_batch[item["payload"]["batch_id"]].append(item["payload"])
@@ -50,6 +51,9 @@ def compare_channels(db: Connection, *, region: str, as_of: datetime, cut: int,
             if case_id in group["case_ids"]:
                 continue
             group["case_ids"].add(case_id)
+            resp = responsibility.get(case_id)
+            if resp is not None and resp["responsible_region"] != region:
+                continue
             status = findings[case_id]["finding"]
             if status in {"substantiated", "pending", "inconclusive"}:
                 group[status] += 1

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from fractions import Fraction
 from sqlite3 import Connection
 
-from silverwatch import cases
+from silverwatch import cases, transfers
 from silverwatch.contracts import AnalysisPolicy, ServiceKind
 from silverwatch.digest import digest
 from silverwatch.errors import invalid
@@ -108,6 +108,7 @@ def risk_rows(db: Connection, cut: int, as_of: datetime, *, region: str,
     for event in current_entities(db, "case", cut=cut, as_of=as_of):
         case_by_batch[event["payload"]["batch_id"]].append(event["payload"])
     decisions = cases.all_findings(db, cut=cut, as_of=as_of)
+    responsibility = transfers.responsibility_map(db, cut=cut, as_of=as_of)
     remediations = cases.current_remediations(db, cut=cut, as_of=as_of)
     remediation_by_case = defaultdict(list)
     for action in remediations:
@@ -115,7 +116,7 @@ def risk_rows(db: Connection, cut: int, as_of: datetime, *, region: str,
     grouped = defaultdict(lambda: {"exposed": 0, "nonresponse": 0, "reports": 0,
                                    "substantiated": 0, "pending": 0, "inconclusive": 0,
                                    "open_severe": 0, "verified_remediations": 0,
-                                   "batches": [], "case_ids": set()})
+                                   "batches": [], "case_ids": set(), "transferred_out": []})
     for batch in filtered:
         row = grouped[(batch["district"], batch["service_kind"], batch["cohort"])]
         row["exposed"] += batch["exposed_people"]
@@ -129,6 +130,12 @@ def risk_rows(db: Connection, cut: int, as_of: datetime, *, region: str,
                 continue
             row["case_ids"].add(case["case_id"])
             finding = decisions[case["case_id"]]["finding"]
+            resp = responsibility.get(case["case_id"])
+            if resp is not None and resp["responsible_region"] != region:
+                row["transferred_out"].append({"case_id": case["case_id"],
+                                               "to_region": resp["responsible_region"],
+                                               "finding": finding})
+                continue
             if finding == "substantiated":
                 row["substantiated"] += 1
             elif finding == "pending":
@@ -148,6 +155,7 @@ def risk_rows(db: Connection, cut: int, as_of: datetime, *, region: str,
         result.append({
             "district": district, "service_kind": kind, "cohort": age,
             **row,
+            "transferred_out": sorted(row["transferred_out"], key=lambda item: item["case_id"]),
             "uncertainty_people": row["nonresponse"],
             "coverage_unknown_batches": row.get("coverage_unknown_batches", 0),
             "substantiated_rate": bounds["observed_rate"],
@@ -233,12 +241,13 @@ def run(db: Connection, *, cut: int, as_of: datetime, region: str,
         "reconciliation": {"complete": reconciliation["complete"],
                            "incomplete_batch_count": len(invalid_batches),
                            "unmatched_case_count": len(reconciliation["unmatched_case_ids"])},
+        "transfers": transfers.regional_summary(db, region=region, cut=cut, as_of=as_of),
         "case_counts": {
             "substantiated": sum(row["substantiated"] for row in scored),
             "pending": sum(row["pending"] for row in scored),
             "inconclusive": sum(row["inconclusive"] for row in scored),
         },
-        "method": "Only facts observed by both the sequence cut and time cut are included; incomplete outreach is shown as uncertain.",
+        "method": "Only facts observed by both the sequence cut and time cut are included; incomplete outreach is shown as uncertain. Cases are attributed to the region responsible at the cut; transferred cases are listed under transfers and counted only in the responsible region.",
     }
     document["digest"] = digest(document)
     return document

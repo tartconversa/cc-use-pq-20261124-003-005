@@ -3,10 +3,26 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from sqlite3 import Connection
 
-from silverwatch import cases, evidence, reconciliation, registry
+from silverwatch import cases, evidence, reconciliation, registry, transfers
 from silverwatch.ledger import current_entities
 
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+
+
+def _transfer_note(resp: dict | None) -> dict | None:
+    if resp is None:
+        return None
+    pending = resp["pending_transfer"]
+    if pending is not None:
+        return {"state": "awaiting_region_decision", "transfer_id": pending["transfer_id"],
+                "to_region": pending["to_region"], "requested_at": pending["requested_at"],
+                "reason": pending["reason"]}
+    accepted = resp["accepted_transfer"]
+    if accepted is not None and resp["responsible_region"] != resp["origin_region"]:
+        return {"state": "transferred_in", "transfer_id": accepted["transfer_id"],
+                "from_region": accepted["from_region"], "accepted_at": accepted["decided_at"],
+                "reason": accepted["reason"]}
+    return None
 
 
 def investigation_queue(db: Connection, *, region: str | None = None,
@@ -15,11 +31,15 @@ def investigation_queue(db: Connection, *, region: str | None = None,
     findings = cases.all_findings(db, cut=cut, as_of=instant)
     touches = {row["entity_id"]: row["payload"]
                for row in current_entities(db, "touch", cut=cut, as_of=instant)}
+    responsibility = transfers.responsibility_map(db, cut=cut, as_of=instant)
     items = []
     for row in cases.current_cases(db, cut=cut, as_of=instant):
         body = row["payload"]
         batch = touches.get(body["batch_id"])
-        if region and (batch is None or batch["region"] != region):
+        resp = responsibility.get(body["case_id"])
+        responsible_region = (resp["responsible_region"] if resp
+                              else batch["region"] if batch else None)
+        if region and responsible_region != region:
             continue
         if body["status"] == "closed":
             continue
@@ -41,10 +61,43 @@ def investigation_queue(db: Connection, *, region: str | None = None,
                       "batch_id": body["batch_id"], "district": batch["district"] if batch else None,
                       "severity": body["severity"], "status": body["status"],
                       "finding": finding["finding"], "age_days": age,
+                      "responsible_region": responsible_region,
+                      "origin_region": resp["origin_region"] if resp else None,
+                      "transfer": _transfer_note(resp),
                       "missing_roles": missing_roles, "evidence_count": len(material),
                       "reasons": reasons, "event_seq": row["seq"]})
     items.sort(key=lambda item: (SEVERITY_ORDER[item["severity"]], -item["age_days"], item["case_id"]))
     return {"as_of": instant.isoformat(), "cut": cut, "count": len(items), "items": items}
+
+
+def transfer_queue(db: Connection, *, region: str, as_of: datetime | None = None,
+                   cut: int | None = None) -> dict:
+    """地区待决定的转入请求、等待接收的转出请求及已登记的接收结论。"""
+    instant = as_of or datetime.now(timezone.utc)
+    findings = cases.all_findings(db, cut=cut, as_of=instant)
+    case_rows = {row["entity_id"]: row["payload"]
+                 for row in cases.current_cases(db, cut=cut, as_of=instant)}
+    incoming, outgoing, resolved = [], [], []
+    for row in current_entities(db, "case_transfer", cut=cut, as_of=instant):
+        body = row["payload"]
+        if region not in {body["from_region"], body["to_region"]}:
+            continue
+        case = case_rows.get(body["case_id"])
+        finding = findings.get(body["case_id"])
+        item = {**body, "event_seq": row["seq"],
+                "case_finding": finding["finding"] if finding else None,
+                "case_severity": case["severity"] if case else None,
+                "case_status": case["status"] if case else None}
+        if body["status"] == "requested":
+            (incoming if body["to_region"] == region else outgoing).append(item)
+        else:
+            resolved.append(item)
+    incoming.sort(key=lambda item: (item["requested_at"], item["transfer_id"]))
+    outgoing.sort(key=lambda item: (item["requested_at"], item["transfer_id"]))
+    resolved.sort(key=lambda item: (item["decided_at"], item["transfer_id"]))
+    return {"region": region, "as_of": instant.isoformat(), "cut": cut,
+            "incoming": incoming, "outgoing": outgoing, "resolved": resolved,
+            "awaiting_decision": len(incoming), "awaiting_acceptance": len(outgoing)}
 
 
 def remediation_queue(db: Connection, *, as_of: datetime | None = None,

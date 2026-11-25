@@ -32,6 +32,7 @@ def compare_regions(db: Connection, *, regions: list[str], as_of: datetime,
         confirmed = sum(row["substantiated"] for row in document["areas"])
         pending = sum(row["pending"] for row in document["areas"])
         incomplete = sum(row["reconciliation_incomplete_batches"] for row in document["areas"])
+        transfer_state = document["transfers"]
         results.append({"region": region, "exposed": exposed, "nonresponse": nonresponse,
                         "confirmed": confirmed, "pending": pending,
                         "coverage_bp": round(exposed * 10_000 / (exposed + nonresponse))
@@ -40,12 +41,15 @@ def compare_regions(db: Connection, *, regions: list[str], as_of: datetime,
                             if exposed else None,
                         "risk_area_count": len(document["risk_flags"]),
                         "unmatched_intake_batches": incomplete,
+                        "transferred_in_confirmed": transfer_state["transferred_in_counts"]["substantiated"],
+                        "transferred_in_pending": transfer_state["transferred_in_counts"]["pending"],
+                        "transferred_out": len(transfer_state["transferred_out"]),
                         "supply": document["supply"],
                         "disclosure_state": "observed" if exposed else "no_exposure"})
     return {"cut": selected_cut, "as_of": as_of.isoformat(), "service_kind": service_kind,
             "cohort": cohort, "policy_id": policy.policy_id,
             "regions": results,
-            "comparison_note": "Values are comparable only for the same time cut, policy, service and cohort; unknown exposure is not treated as zero risk."}
+            "comparison_note": "Values are comparable only for the same time cut, policy, service and cohort; unknown exposure is not treated as zero risk. Cases are attributed to the region responsible at the cut; transferred-in cases are reported separately from exposure-based rates."}
 
 
 def rank_by_confirmed_rate(result: dict) -> list[dict]:
